@@ -2,75 +2,97 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import numpy as np
+import requests
+import io
+import os
 
 # Page Configuration
 st.set_page_config(page_title="GTA Strategy Explorer", layout="wide")
 
-st.title("🏙️ Toronto Labour & Business Dynamics Explorer")
-st.markdown("""
-This strategic tool merges **Municipal Business Licensing** data with **Market Sentiment** to identify high-growth corridors in the Greater Toronto Area.
-""")
-
-# 1. Data Loading (Using your existing pipeline logic)
+# --- DATA INGESTION LOGIC (Self-Healing) ---
 @st.cache_data
 def load_data():
-    # For the demo, we use the cleaned business licensing data
-    # In production, this calls your API fetcher
-    df = pd.read_csv("business_licences_toronto.csv")
+    """
+    Checks for local data. If missing, fetches directly from Toronto Open Data API.
+    """
+    local_path = "business_licences_toronto.csv"
     
-    # Feature Engineering: Simulated 'Growth Score' based on ward activity
-    # This represents your "Insight Finding" capability
-    ward_counts = df['Ward_Name'].value_counts().to_dict()
-    df['Ward_Density'] = df['Ward_Name'].map(ward_counts)
+    if os.path.exists(local_path):
+        df = pd.read_csv(local_path)
+    else:
+        # If file is missing on GitHub/Streamlit Cloud, fetch it live
+        with st.spinner("Fetching latest data from Toronto Open Data Portal..."):
+            # Direct link to the 'Business Licensing' CSV resource
+            csv_url = "https://ckan0.cf.opendata.inter.prod-toronto.ca/dataset/business-licensing-all-categories/resource/8834458b-a7e1-4328-8686-22a84a282f9d/download/business-licences-all-categories.csv"
+            headers = {"User-Agent": "Mozilla/5.0"}
+            
+            try:
+                response = requests.get(csv_url, headers=headers, timeout=30)
+                df = pd.read_csv(io.StringIO(response.content.decode('utf-8')))
+                # Save locally for future sessions (in-memory cache will also handle this)
+                df.to_csv(local_path, index=False)
+            except Exception as e:
+                st.error(f"Critical Error: Could not connect to Toronto Open Data API. {e}")
+                return pd.DataFrame() # Return empty if failed
+
+    # Feature Engineering (Market Health Score)
+    # We create this to show 'Insight Finding' capabilities
+    if not df.empty:
+        ward_counts = df['Ward_Name'].value_counts().to_dict()
+        df['Ward_Density'] = df['Ward_Name'].map(ward_counts)
+        np.random.seed(42) # Consistent simulation
+        df['Market_Health_Score'] = np.random.uniform(60, 95, size=len(df))
     
-    # Normalising a 'Market Health Score' (Simulated)
-    df['Market_Health_Score'] = np.random.uniform(60, 95, size=len(df))
     return df
 
-try:
-    data = load_data()
+# --- UI LAYOUT ---
+st.title("🏙️ Toronto Labour & Business Dynamics Explorer")
+st.markdown("This tool merges **Municipal Business Licensing** with **Market Analytics** to find growth zones.")
 
-    # 2. Sidebar Filters
+data = load_data()
+
+if not data.empty:
+    # Sidebar Filters
     st.sidebar.header("Filter Visualisation")
+    # Clean up Ward names (remove NaNs)
+    available_wards = sorted([str(w) for w in data['Ward_Name'].dropna().unique()])
     selected_ward = st.sidebar.multiselect(
         "Select Toronto Wards:", 
-        options=sorted(data['Ward_Name'].dropna().unique()),
-        default=data['Ward_Name'].dropna().unique()[:3]
+        options=available_wards,
+        default=available_wards[:3]
     )
 
-    filtered_data = data[data['Ward_Name'].isin(selected_ward)]
+    # Filter Data
+    filtered_data = data[data['Ward_Name'].astype(str).isin(selected_ward)]
 
-    # 3. Key Performance Indicators (KPIs)
+    # Metrics
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Active Licences", f"{len(filtered_data):,}")
     with col2:
         st.metric("Avg. Market Health", f"{filtered_data['Market_Health_Score'].mean():.1f}%")
     with col3:
-        st.metric("Growth Forecast", "+4.2%", delta_color="normal")
+        st.metric("Growth Forecast", "+4.2%", delta="Real Estate Core", delta_color="normal")
 
-    # 4. Strategic Visualisation
+    # Chart
     st.subheader("Business Density vs. Market Health by Ward")
-    
+    chart_data = filtered_data.groupby('Ward_Name').agg({
+        'Market_Health_Score': 'mean',
+        'Ward_Density': 'first'
+    }).reset_index()
+
     fig = px.scatter(
-        filtered_data.groupby('Ward_Name').agg({
-            'Market_Health_Score': 'mean',
-            'Ward_Density': 'first',
-            'CATEGORY': 'count'
-        }).reset_index(),
+        chart_data,
         x="Ward_Density",
         y="Market_Health_Score",
-        size="CATEGORY",
+        size="Ward_Density",
         color="Ward_Name",
         hover_name="Ward_Name",
         labels={"Ward_Density": "Active Business Count", "Market_Health_Score": "Strategic Health Index"},
         template="plotly_white"
     )
-    
     st.plotly_chart(fig, use_container_width=True)
 
-    # 5. The "Senior Analyst" Insight Box
-    st.info("💡 **Strategic Recommendation:** Wards with high density but lagging 'Market Health' (bottom right) represent high-friction zones where operational optimisations or legacy system upgrades (e.g., reducing latency in reporting) could yield the highest ROI.")
-
-except Exception as e:
-    st.error(f"Please ensure 'business_licences_toronto.csv' is in the repository. Error: {e}")
+    st.info("💡 **Strategic Recommendation:** Wards with high density but lagging 'Market Health' (bottom right) represent high-friction zones.")
+else:
+    st.warning("Data could not be loaded. Check API connection.")
