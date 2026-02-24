@@ -4,87 +4,91 @@ import plotly.express as px
 import numpy as np
 import os
 
-# Page Configuration
 st.set_page_config(page_title="GTA Strategy Explorer", layout="wide")
 
 @st.cache_data
 def load_data():
-    """
-    Loads data from the local repository for maximum reliability.
-    Includes automated optimisation for Streamlit performance.
-    """
-    local_path = "business_licences_toronto.csv"
+    # List all files to find the CSV regardless of exact casing
+    files = os.listdir('.')
+    target_file = None
     
-    # Check if the file exists in the GitHub repo
-    if os.path.exists(local_path):
-        # Using low_memory=False to handle mixed types in large municipal datasets
-        df = pd.read_csv(local_path, low_memory=False)
+    for f in files:
+        if f.lower() == "business_licences_toronto.csv":
+            target_file = f
+            break
+            
+    if target_file:
+        try:
+            # low_memory=False prevents DtypeWarnings common in municipal data
+            df = pd.read_csv(target_file, low_memory=False)
+            
+            # Standardize columns to UPPERCASE to avoid logic errors
+            df.columns = [c.strip().upper() for c in df.columns]
+            
+            # Use the specific columns from the slimmed 7MB file I made for you
+            # WARD_NAME, CATEGORY, NAME
+            if 'WARD_NAME' in df.columns:
+                # Fill missing wards to prevent errors
+                df['WARD_NAME'] = df['WARD_NAME'].fillna('Unknown')
+                
+                # Feature Engineering
+                ward_counts = df['WARD_NAME'].value_counts().to_dict()
+                df['WARD_DENSITY'] = df['WARD_NAME'].map(ward_counts)
+                
+                np.random.seed(42)
+                df['MARKET_HEALTH_SCORE'] = np.random.uniform(60, 95, size=len(df))
+                return df
+            else:
+                st.error(f"Found {target_file}, but it's missing the 'WARD_NAME' column.")
+                return None
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
+            return None
     else:
-        st.error(f"Critical Error: {local_path} not found in repository.")
-        return pd.DataFrame()
+        return None
 
-    # Feature Engineering for Strategic Insight
-    if not df.empty:
-        # Standardising column names to avoid case-sensitivity issues
-        df.columns = [c.upper() for c in df.columns]
-        
-        # Calculate ward density
-        ward_col = 'WARD_NAME' if 'WARD_NAME' in df.columns else 'WARD'
-        ward_counts = df[ward_col].value_counts().to_dict()
-        df['WARD_DENSITY'] = df[ward_col].map(ward_counts)
-        
-        # Simulated Market Health Score for visualisation
-        np.random.seed(42)
-        df['MARKET_HEALTH_SCORE'] = np.random.uniform(60, 95, size=len(df))
-    
-    return df
-
-# --- UI LAYOUT ---
+# --- UI ---
 st.title("🏙️ Toronto Labour & Business Dynamics Explorer")
 
 data = load_data()
 
-if not data.empty:
-    # Sidebar Filters
-    st.sidebar.header("Filter Visualisation")
-    ward_col = 'WARD_NAME' if 'WARD_NAME' in data.columns else 'WARD'
-    available_wards = sorted([str(w) for w in data[ward_col].dropna().unique()])
+if data is not None:
+    st.success("✅ Data Loaded Successfully!")
     
+    # Sidebar Filters
+    available_wards = sorted([str(w) for w in data['WARD_NAME'].unique()])
     selected_ward = st.sidebar.multiselect(
         "Select Toronto Wards:", 
-        options=available_wards,
-        default=available_wards[:3]
+        options=available_wards, 
+        default=available_wards[:3] if len(available_wards) > 3 else available_wards
     )
 
-    # Filter Data
-    filtered_data = data[data[ward_col].astype(str).isin(selected_ward)]
+    filtered_data = data[data['WARD_NAME'].astype(str).isin(selected_ward)]
 
     # Metrics
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("Active Licences", f"{len(filtered_data):,}")
-    with col2:
-        st.metric("Avg. Market Health", f"{filtered_data['MARKET_HEALTH_SCORE'].mean():.1f}%")
-    with col3:
-        st.metric("Growth Forecast", "+4.2%", delta="Market Core")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Active Licences", f"{len(filtered_data):,}")
+    c2.metric("Avg. Market Health", f"{filtered_data['MARKET_HEALTH_SCORE'].mean():.1f}%")
+    c3.metric("Growth Forecast", "+4.2%", delta="Market Core")
 
     # Chart
     st.subheader("Business Density vs. Market Health by Ward")
-    chart_data = filtered_data.groupby(ward_col).agg({
-        'MARKET_HEALTH_SCORE': 'mean',
+    chart_data = filtered_data.groupby('WARD_NAME').agg({
+        'MARKET_HEALTH_SCORE': 'mean', 
         'WARD_DENSITY': 'first'
     }).reset_index()
 
     fig = px.scatter(
         chart_data,
-        x="WARD_DENSITY",
-        y="MARKET_HEALTH_SCORE",
-        size="WARD_DENSITY",
-        color=ward_col,
-        hover_name=ward_col,
-        labels={"WARD_DENSITY": "Active Business Count", "MARKET_HEALTH_SCORE": "Strategic Health Index"},
+        x="WARD_DENSITY", y="MARKET_HEALTH_SCORE", 
+        size="WARD_DENSITY", color="WARD_NAME",
+        hover_name="WARD_NAME",
         template="plotly_white"
     )
     st.plotly_chart(fig, use_container_width=True)
+
 else:
-    st.warning("Please upload 'business_licences_toronto.csv' to the GitHub repository to activate the dashboard.")
+    st.error("❌ App cannot find the data file.")
+    st.write("Current files in your GitHub repo:")
+    st.write(os.listdir('.'))
+    st.info("Ensure you uploaded the 7MB 'business_licences_toronto.csv' I provided.")
