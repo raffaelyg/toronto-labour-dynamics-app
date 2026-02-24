@@ -9,9 +9,6 @@ import os
 # Page Configuration
 st.set_page_config(page_title="GTA Strategy Explorer", layout="wide")
 
-# --- DATA INGESTION LOGIC (Self-Healing) ---
-@st.cache_data
-
 import requests
  
 # Toronto Open Data is stored in a CKAN instance. It's APIs are documented here:
@@ -51,6 +48,8 @@ for idx, resource in enumerate(package["result"]["resources"]):
            resource_metadata = requests.get(url).json()
            print(resource_metadata)
            # From here, you can use the "url" attribute to download this file
+# --- DATA INGESTION LOGIC (Self-Healing) ---
+@st.cache_data
 def load_data():
     """
     Checks for local data. If missing, fetches directly from Toronto Open Data API.
