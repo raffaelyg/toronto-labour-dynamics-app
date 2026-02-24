@@ -2,99 +2,54 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import numpy as np
-import requests
-import io
 import os
 
 # Page Configuration
 st.set_page_config(page_title="GTA Strategy Explorer", layout="wide")
 
-import requests
- 
-# Toronto Open Data is stored in a CKAN instance. It's APIs are documented here:
-# https://docs.ckan.org/en/latest/api/
- 
-# To hit our API, you'll be making requests to:
-base_url = "https://ckan0.cf.opendata.inter.prod-toronto.ca"
- 
-# Datasets are called "packages". Each package can contain many "resources"
-# To retrieve the metadata for this package and its resources, use the package name in this page's URL:
-url = base_url + "/api/3/action/package_show"
-params = { "id": "municipal-licensing-and-standards-business-licences-and-permits"}
-package = requests.get(url, params = params).json()
- 
-# To get resource data:
-for idx, resource in enumerate(package["result"]["resources"]):
- 
-       # for datastore_active resources:
-       if resource["datastore_active"]:
- 
-           # To get all records in CSV format:
-           url = base_url + "/datastore/dump/" + resource["id"]
-           resource_dump_data = requests.get(url).text
-           print(resource_dump_data)
- 
-           # To selectively pull records and attribute-level metadata:
-           url = base_url + "/api/3/action/datastore_search"
-           p = { "id": resource["id"] }
-           resource_search_data = requests.get(url, params = p).json()["result"]
-           print(resource_search_data)
-           # This API call has many parameters. They're documented here:
-           # https://docs.ckan.org/en/latest/maintaining/datastore.html
- 
-       # To get metadata for non datastore_active resources:
-       if not resource["datastore_active"]:
-           url = base_url + "/api/3/action/resource_show?id=" + resource["id"]
-           resource_metadata = requests.get(url).json()
-           print(resource_metadata)
-           # From here, you can use the "url" attribute to download this file
-# --- DATA INGESTION LOGIC (Self-Healing) ---
 @st.cache_data
 def load_data():
     """
-    Checks for local data. If missing, fetches directly from Toronto Open Data API.
+    Loads data from the local repository for maximum reliability.
+    Includes automated optimisation for Streamlit performance.
     """
     local_path = "business_licences_toronto.csv"
     
+    # Check if the file exists in the GitHub repo
     if os.path.exists(local_path):
-        df = pd.read_csv(local_path)
+        # Using low_memory=False to handle mixed types in large municipal datasets
+        df = pd.read_csv(local_path, low_memory=False)
     else:
-        # If file is missing on GitHub/Streamlit Cloud, fetch it live
-        with st.spinner("Fetching latest data from Toronto Open Data Portal..."):
-            # Direct link to the 'Business Licensing' CSV resource
-            csv_url = url
-            headers = {"User-Agent": "Mozilla/5.0"}
-            
-            try:
-                response = requests.get(csv_url, headers=headers, timeout=30)
-                df = pd.read_csv(io.StringIO(response.content.decode('utf-8')))
-                # Save locally for future sessions (in-memory cache will also handle this)
-                df.to_csv(local_path, index=False)
-            except Exception as e:
-                st.error(f"Critical Error: Could not connect to Toronto Open Data API. {e}")
-                return pd.DataFrame() # Return empty if failed
+        st.error(f"Critical Error: {local_path} not found in repository.")
+        return pd.DataFrame()
 
-    # Feature Engineering (Market Health Score)
-    # We create this to show 'Insight Finding' capabilities
+    # Feature Engineering for Strategic Insight
     if not df.empty:
-        ward_counts = df['Ward_Name'].value_counts().to_dict()
-        df['Ward_Density'] = df['Ward_Name'].map(ward_counts)
-        np.random.seed(42) # Consistent simulation
-        df['Market_Health_Score'] = np.random.uniform(60, 95, size=len(df))
+        # Standardising column names to avoid case-sensitivity issues
+        df.columns = [c.upper() for c in df.columns]
+        
+        # Calculate ward density
+        ward_col = 'WARD_NAME' if 'WARD_NAME' in df.columns else 'WARD'
+        ward_counts = df[ward_col].value_counts().to_dict()
+        df['WARD_DENSITY'] = df[ward_col].map(ward_counts)
+        
+        # Simulated Market Health Score for visualisation
+        np.random.seed(42)
+        df['MARKET_HEALTH_SCORE'] = np.random.uniform(60, 95, size=len(df))
     
     return df
 
 # --- UI LAYOUT ---
 st.title("🏙️ Toronto Labour & Business Dynamics Explorer")
-st.markdown("This tool merges **Municipal Business Licensing** with **Market Analytics** to find growth zones.")
 
 data = load_data()
 
 if not data.empty:
     # Sidebar Filters
     st.sidebar.header("Filter Visualisation")
-    # Clean up Ward names (remove NaNs)
-    available_wards = sorted([str(w) for w in data['Ward_Name'].dropna().unique()])
+    ward_col = 'WARD_NAME' if 'WARD_NAME' in data.columns else 'WARD'
+    available_wards = sorted([str(w) for w in data[ward_col].dropna().unique()])
+    
     selected_ward = st.sidebar.multiselect(
         "Select Toronto Wards:", 
         options=available_wards,
@@ -102,36 +57,34 @@ if not data.empty:
     )
 
     # Filter Data
-    filtered_data = data[data['Ward_Name'].astype(str).isin(selected_ward)]
+    filtered_data = data[data[ward_col].astype(str).isin(selected_ward)]
 
     # Metrics
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Active Licences", f"{len(filtered_data):,}")
     with col2:
-        st.metric("Avg. Market Health", f"{filtered_data['Market_Health_Score'].mean():.1f}%")
+        st.metric("Avg. Market Health", f"{filtered_data['MARKET_HEALTH_SCORE'].mean():.1f}%")
     with col3:
-        st.metric("Growth Forecast", "+4.2%", delta="Real Estate Core", delta_color="normal")
+        st.metric("Growth Forecast", "+4.2%", delta="Market Core")
 
     # Chart
     st.subheader("Business Density vs. Market Health by Ward")
-    chart_data = filtered_data.groupby('Ward_Name').agg({
-        'Market_Health_Score': 'mean',
-        'Ward_Density': 'first'
+    chart_data = filtered_data.groupby(ward_col).agg({
+        'MARKET_HEALTH_SCORE': 'mean',
+        'WARD_DENSITY': 'first'
     }).reset_index()
 
     fig = px.scatter(
         chart_data,
-        x="Ward_Density",
-        y="Market_Health_Score",
-        size="Ward_Density",
-        color="Ward_Name",
-        hover_name="Ward_Name",
-        labels={"Ward_Density": "Active Business Count", "Market_Health_Score": "Strategic Health Index"},
+        x="WARD_DENSITY",
+        y="MARKET_HEALTH_SCORE",
+        size="WARD_DENSITY",
+        color=ward_col,
+        hover_name=ward_col,
+        labels={"WARD_DENSITY": "Active Business Count", "MARKET_HEALTH_SCORE": "Strategic Health Index"},
         template="plotly_white"
     )
     st.plotly_chart(fig, use_container_width=True)
-
-    st.info("💡 **Strategic Recommendation:** Wards with high density but lagging 'Market Health' (bottom right) represent high-friction zones.")
 else:
-    st.warning("Data could not be loaded. Check API connection.")
+    st.warning("Please upload 'business_licences_toronto.csv' to the GitHub repository to activate the dashboard.")
